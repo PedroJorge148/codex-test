@@ -1,0 +1,20 @@
+{
+  "realm": "rh", "enabled": true, "displayName": "Entre · Equipe de RH",
+  "registrationAllowed": false, "resetPasswordAllowed": true, "verifyEmail": true,
+  "loginWithEmailAllowed": true, "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true, "failureFactor": 5,
+  "internationalizationEnabled": true, "supportedLocales": ["pt-BR"], "defaultLocale": "pt-BR",
+  "passwordPolicy": "length(12) and notUsername(undefined)",
+  "smtpServer": {"host": "mailpit", "port": "1025", "from": "rh@example.test", "fromDisplayName": "Equipe de RH", "auth": "false", "ssl": "false", "starttls": "false"},
+  "clients": [
+    {"clientId": "rh-web", "name": "Entre", "enabled": true, "publicClient": false, "secret": "${OIDC_CLIENT_SECRET}", "standardFlowEnabled": true, "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3000/auth/callback", "http://localhost:3000/auth/login*"], "webOrigins": ["http://localhost:3000"],
+      "attributes": {"pkce.code.challenge.method": "S256"}, "defaultClientScopes": ["profile", "email", "roles"]},
+    {"clientId": "rh-provisioner", "enabled": true, "publicClient": false, "secret": "${KEYCLOAK_ADMIN_CLIENT_SECRET}", "serviceAccountsEnabled": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false}
+  ],
+  "users": [
+    {"username": "admin@example.test", "firstName": "Administrador", "lastName": "RH", "email": "admin@example.test", "enabled": true, "emailVerified": true,
+      "credentials": [{"type": "password", "value": "${INITIAL_ADMIN_PASSWORD}", "temporary": false}]},
+    {"username": "service-account-rh-provisioner", "enabled": true, "serviceAccountClientId": "rh-provisioner", "clientRoles": {"realm-management": ["manage-users", "view-users", "query-users"]}}
+  ]
+}

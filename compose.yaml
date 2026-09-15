@@ -1,0 +1,111 @@
+name: entre-mvp
+x-app-env: &app-env
+  NODE_ENV: development
+  HOST: 0.0.0.0
+  PORT: 3000
+  DATABASE_URL: postgresql://rh_app:${DATABASE_APP_PASSWORD:?Execute pnpm configure}@postgres:5432/rh
+  APP_URL: http://localhost:3000
+  AUDIT_KEY: ${AUDIT_KEY:?Execute pnpm configure}
+  OIDC_ISSUER: http://localhost:8080/realms/rh
+  OIDC_INTERNAL_URL: http://keycloak:8080
+  OIDC_CLIENT_ID: rh-web
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Execute pnpm configure}
+  KEYCLOAK_ADMIN_CLIENT_ID: rh-provisioner
+  KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?Execute pnpm configure}
+  RETENTION_APPROVED: 'false'
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rh
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Execute pnpm configure}
+      DATABASE_APP_PASSWORD: ${DATABASE_APP_PASSWORD:?Execute pnpm configure}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Execute pnpm configure}
+    ports: ['127.0.0.1:55433:5432']
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/init-db.sh:/docker-entrypoint-initdb.d/10-rh.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d rh']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ['127.0.0.1:8025:8025']
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3
+    command: ['start-dev', '--import-realm']
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: rh_identity
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Execute pnpm configure}
+      KC_HOSTNAME: http://localhost:8080
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Execute pnpm configure}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Execute pnpm configure}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?Execute pnpm configure}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Execute pnpm configure}
+    ports: ['127.0.0.1:8080:8080']
+    volumes: ['./infra/rh-realm.json:/opt/keycloak/data/import/rh-realm.json:ro']
+    healthcheck:
+      test: ['CMD', 'bash', '-ec', 'exec 3<>/dev/tcp/127.0.0.1/8080; printf "GET /realms/rh/.well-known/openid-configuration HTTP/1.0\r\nHost: localhost:8080\r\n\r\n" >&3; read -r status <&3; [[ "$$status" == *" 200 "* ]]']
+      interval: 3s
+      timeout: 3s
+      start_period: 30s
+      retries: 40
+    depends_on:
+      postgres: {condition: service_healthy}
+      mailpit: {condition: service_started}
+  migrate:
+    build: .
+    image: entre-mvp:local
+    command: ['node', 'dist/server/migrate.js']
+    environment:
+      DATABASE_ADMIN_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/rh
+    depends_on:
+      postgres: {condition: service_healthy}
+  bootstrap:
+    image: entre-mvp:local
+    pull_policy: never
+    command: ['node', 'dist/server/bootstrap.js']
+    environment:
+      DATABASE_ADMIN_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/rh
+      INITIAL_ADMIN_EMAIL: admin@example.test
+      ORGANIZATION_NAME: Equipe de RH
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+  app:
+    image: entre-mvp:local
+    pull_policy: never
+    environment: *app-env
+    ports: ['127.0.0.1:3000:3000']
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+      keycloak: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  worker:
+    image: entre-mvp:local
+    pull_policy: never
+    command: ['node', 'dist/server/worker-main.js']
+    environment: *app-env
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+  e2e:
+    profiles: [test]
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    network_mode: host
+    working_dir: /work
+    user: '${LOCAL_UID:-1002}:${LOCAL_GID:-1002}'
+    environment:
+      HOME: /tmp
+    volumes: ['.:/work']
+    command: ['node', 'node_modules/@playwright/test/cli.js', 'test']
+volumes:
+  postgres-data:
